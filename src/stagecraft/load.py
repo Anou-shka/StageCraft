@@ -30,7 +30,16 @@ ORIG_COLS = [
     "program_indicator", "harp_indicator", "property_valuation_method", "io_indicator", "mi_cancellation",
 ]
 
-# Monthly performance data file, positions 1-32.
+# Current release (seen in 2026 downloads): the origination file has 31 fields.
+# Servicer Name and MI Cancellation Indicator moved to the performance file
+# (positions 34 and 33); a trailing field was added. Positions 1-24 are unchanged.
+ORIG_COLS_31 = ORIG_COLS[:24] + [
+    "super_conforming", "pre_harp_loan_id", "program_indicator", "harp_indicator", "property_valuation_method",
+    "io_indicator", "orig_extra_31",
+]
+
+# Monthly performance data file, positions 1-32 (the current release appends
+# 33 MI cancellation indicator, 34 current servicer name, 35 an extra amount).
 PERF_COLS = [
     "loan_id", "period", "current_upb", "dlq_status", "loan_age", "rem_months", "defect_settlement_date",
     "mod_flag", "zb_code", "zb_date", "current_rate", "deferred_upb", "ddlpi", "mi_recoveries",
@@ -61,9 +70,10 @@ def discover(raw_dir: Path, vintages: tuple[int, int] | None = None) -> dict[int
         m = re.fullmatch(r"sample_(\d{4})\.zip", p.name)
         if m:
             found.setdefault(int(m.group(1)), {})["zip"] = p
-        m = re.fullmatch(r"sample_(orig|svcg)_(\d{4})\.txt", p.name)
+        m = re.fullmatch(r"sample_(orig|svcg|perf)_(\d{4})\.txt", p.name)
         if m:
-            found.setdefault(int(m.group(2)), {})[m.group(1)] = p
+            kind = "orig" if m.group(1) == "orig" else "svcg"
+            found.setdefault(int(m.group(2)), {})[kind] = p
     if vintages:
         found = {v: f for v, f in found.items() if vintages[0] <= v <= vintages[1]}
     return found
@@ -75,8 +85,10 @@ def _extract(files: dict[str, Path], vintage: int, interim: Path) -> dict[str, P
     out = interim / str(vintage)
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(files["zip"]) as z:
-        for kind in ("orig", "svcg"):
-            name = f"sample_{kind}_{vintage}.txt"
+        names = z.namelist()
+        # Performance file is sample_svcg_YYYY.txt in older releases, sample_perf_YYYY.txt in newer ones.
+        for kind, cands in (("orig", ["orig"]), ("svcg", ["svcg", "perf"])):
+            name = next(f"sample_{c}_{vintage}.txt" for c in cands if f"sample_{c}_{vintage}.txt" in names)
             target = out / name
             if not target.exists() or target.stat().st_size != z.getinfo(name).file_size:
                 z.extract(name, out)
@@ -99,7 +111,7 @@ def _scan(p: Path, cols: list[str]) -> pl.LazyFrame:
 
 
 def parse_orig(p: Path, vintage: int) -> pl.DataFrame:
-    lf = _scan(p, ORIG_COLS)
+    lf = _scan(p, ORIG_COLS_31 if _n_fields(p) == 31 else ORIG_COLS)
     na = lambda c, bad, dt=pl.Int32: pl.when(_num(c, dt) == bad).then(None).otherwise(_num(c, dt)).alias(c)  # noqa: E731
     return lf.select(
         _str("loan_id").alias("loan_id"),
