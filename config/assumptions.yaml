@@ -98,9 +98,12 @@ hazard:
   snapshot_months: [6, 12]
   first_snapshot: "2005-06-30"
   max_horizon: 60              # months followed after each snapshot
-  # Keep this share of non-default rows (events always kept); weights restore
-  # the population. 1.0 = no sampling. Lower it for the full dataset.
+  # Keep at most this share of non-default rows (default rows are always
+  # kept); weights restore the population. The share is lowered automatically
+  # so the training panel stays under max_training_rows (the full Freddie
+  # sample has several hundred million snapshot-horizon rows).
   nonevent_sample_frac: 1.0
+  max_training_rows: 6000000
   horizon_buckets: [3, 6, 12, 24]   # how fast a delinquency signal decays
   # Ridge penalty (in pseudo-observations) on the hazard coefficients; keeps
   # sparse status x horizon cells finite. Small relative to the row count.

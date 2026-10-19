@@ -21,7 +21,7 @@ from __future__ import annotations
 import polars as pl
 
 from .config import load_config, path
-from .load import read_orig, scan_perf
+from .load import read_orig
 from .macro import load_macro
 
 DEFAULT = 7
@@ -101,12 +101,18 @@ def loan_events(perf: pl.LazyFrame, cfg: dict) -> pl.LazyFrame:
 
 
 def build_panel(cfg: dict | None = None) -> None:
-    """Write data/processed/loans.parquet and panel.parquet."""
+    """Write data/processed/loans.parquet and panel/panel_YYYY.parquet.
+
+    Loans never cross vintage files, so the panel is built one vintage at a
+    time: memory stays bounded by the largest vintage, not the whole dataset."""
     cfg = cfg or load_config()
     out = path(cfg, "processed")
+    (out / "panel").mkdir(parents=True, exist_ok=True)
+    for old in (out / "panel").glob("*.parquet"):
+        old.unlink()
     d = cfg["default_definition"]
-    perf = scan_perf(cfg)
-    loans = loan_events(perf, cfg).collect()
+    perf_files = sorted((out / "perf").glob("perf_*.parquet"))
+    loans = pl.concat([loan_events(pl.scan_parquet(f), cfg).collect() for f in perf_files])
     orig = read_orig(cfg)
     macro = load_macro(cfg)
     hpi = pl.DataFrame({"mi": macro.index.to_numpy().astype("int32"), "hpi": macro["hpi"].to_numpy()})
@@ -118,9 +124,15 @@ def build_panel(cfg: dict | None = None) -> None:
     loans = loans.join(orig.select("loan_id", "vintage"), on="loan_id", how="left")
     loans.write_parquet(out / "loans.parquet")
 
+    for f in perf_files:
+        _panel_one(pl.scan_parquet(f), loans, orig, hpi, cfg).sink_parquet(out / "panel" / f.name.replace("perf_", "panel_"))
+
+
+def _panel_one(perf: pl.LazyFrame, loans: pl.DataFrame, orig: pl.DataFrame, hpi: pl.DataFrame, cfg: dict) -> pl.LazyFrame:
+    d = cfg["default_definition"]
     k = n_transient(cfg)
     ev = loans.lazy().select("loan_id", "default_mi", "exit_mi", "exit_code")
-    p = (
+    return (
         perf.join(ev, on="loan_id", how="left")
         .join(orig.lazy().select("loan_id", "fpd_mi", "orig_mi", "ltv", "orig_upb", "credit_score", "hpi_orig",
                                  "orig_rate", "orig_term"), on="loan_id", how="left")
@@ -161,11 +173,10 @@ def build_panel(cfg: dict | None = None) -> None:
         )
         .sort(["loan_id", "mi"])
     )
-    p.sink_parquet(out / "panel.parquet")
 
 
 def scan_panel(cfg: dict) -> pl.LazyFrame:
-    return pl.scan_parquet(path(cfg, "processed") / "panel.parquet")
+    return pl.scan_parquet(path(cfg, "processed") / "panel" / "*.parquet")
 
 
 def read_loans(cfg: dict) -> pl.DataFrame:

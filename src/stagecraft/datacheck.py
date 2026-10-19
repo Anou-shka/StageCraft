@@ -56,8 +56,10 @@ def sign_convention(loans: pl.DataFrame, cfg: dict) -> dict:
                       & pl.col("actual_loss").is_not_null() & pl.col("net_sales_proceeds").is_not_null())
     if ce.height == 0:
         return {"sign": -1, "n": 0, "match_share": float("nan")}
-    rebuilt = (ce["zb_removal_upb"] + ce["dai"].fill_null(0) - ce["net_sales_proceeds"]
-               - ce["mi_recoveries"].fill_null(0) - ce["non_mi_recoveries"].fill_null(0)
+    # Component signs differ between releases (the current files carry
+    # recoveries as negatives), so rebuild the loss from magnitudes.
+    rebuilt = (ce["zb_removal_upb"] + ce["dai"].fill_null(0).abs() - ce["net_sales_proceeds"].abs()
+               - ce["mi_recoveries"].fill_null(0).abs() - ce["non_mi_recoveries"].fill_null(0).abs()
                + ce["expenses"].fill_null(0).abs())
     pos = ((ce["actual_loss"] - rebuilt).abs() < 0.01 * ce["zb_removal_upb"]).mean()
     neg = ((ce["actual_loss"] + rebuilt).abs() < 0.01 * ce["zb_removal_upb"]).mean()
@@ -116,7 +118,7 @@ def write_report(cfg: dict | None = None) -> str:
 
     # Delinquency codes.
     dq = perf.group_by("dlq_raw").len().collect().sort("len", descending=True)
-    dq = dq.with_columns((100 * pl.col("len") / pl.col("len").sum()).alias("share %"))
+    dq = dq.with_columns((100 * pl.col("len").cast(pl.Float64) / pl.col("len").cast(pl.Float64).sum()).alias("share %"))
     out += ["## 3. Delinquency status codes present", "",
             "Freddie Mac reports missed payments under the MBA method: 0 = current, 1 = 30-59 days, 2 = 60-89, "
             "3 = 90-119, and so on; `RA` = REO acquisition.", "", _md(dq.head(15)), "",
@@ -147,7 +149,8 @@ def write_report(cfg: dict | None = None) -> str:
             f"{100 * sc['match_share']:.1f}% of loans). The LGD module applies this sign.", ""]
     ce = loans.filter(pl.col("exit_type") == "credit_event")
     if ce.height:
-        sev = ce.with_columns((sc["sign"] * pl.col("actual_loss") / pl.col("upb_at_default")).alias("sev")) \
+        upb_def = pl.when(pl.col("upb_at_default") > 0).then(pl.col("upb_at_default")).otherwise(pl.col("zb_removal_upb"))
+        sev = ce.with_columns((sc["sign"] * pl.col("actual_loss") / upb_def).alias("sev")) \
             .group_by((pl.col("default_mi") // 12).alias("default year")).agg(
                 pl.len().alias("credit events"), pl.col("sev").mean().alias("mean loss / UPB at default"),
                 pl.col("actual_loss").null_count().alias("loss missing")).sort("default year")

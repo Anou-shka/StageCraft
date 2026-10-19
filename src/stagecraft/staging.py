@@ -32,7 +32,7 @@ def snapshot(panel: pl.LazyFrame, orig: pl.DataFrame, scores: pl.DataFrame, repo
         .select("loan_id", "state", "status", "reo", "upb", "deferred_upb", "current_rate", "rem_months", "age_fpd",
                 "modified", "assisted", "deferred", "last_default_mi", "prior_default")
         .join(orig.lazy().select("loan_id", "vintage", "credit_score", "ltv", "orig_upb", "orig_rate", "orig_term",
-                                 "hpi_orig", "mi_pct", "occupancy", "fpd_mi"), on="loan_id", how="left")
+                                 "hpi_orig", "mi_pct", "occupancy", "fpd_mi", "property_state"), on="loan_id", how="left")
         .join(scores.lazy().select("loan_id", "score"), on="loan_id", how="left")
         .collect()
         .to_pandas()

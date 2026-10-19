@@ -51,7 +51,7 @@ Two subtleties worth raising in an interview:
 
 ## What an Indian bank would do differently
 
-- **The floors bind for prime housing.** Stagecraft's modelled Stage 1 coverage (about 0.04% on the sample) is
+- **The floors bind for prime housing.** Stagecraft's modelled Stage 1 coverage (0.10% at December 2019 on the Freddie Mac book) is
   far below the 0.25% floor, so a bank would book the floor. Modelled ECL then matters mainly for Stage 2/3 and for
   riskier products.
 - **Macro drivers.** Swap US unemployment/HPI for Indian GDP growth, the repo rate, and property prices (RBI's

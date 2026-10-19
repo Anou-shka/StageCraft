@@ -88,11 +88,12 @@ def img(p, width=W, max_h=9.5 * cm):
 
 def money(v):
     v = float(v)
-    if abs(v) >= 1e9:
-        return f"${v / 1e9:,.2f}bn"
-    if abs(v) >= 1e6:
-        return f"${v / 1e6:,.2f}m"
-    return f"${v:,.0f}"
+    sign, a = ("&minus;" if v < 0 else ""), abs(v)
+    if a >= 1e9:
+        return f"{sign}${a / 1e9:,.2f}bn"
+    if a >= 1e6:
+        return f"{sign}${a / 1e6:,.2f}m"
+    return f"{sign}${a:,.0f}"
 
 
 pct = lambda v: f"{float(v):.2%}"  # noqa: E731
@@ -107,6 +108,33 @@ def _footer(canvas, doc):
     canvas.drawString(1.8 * cm, 1.1 * cm, "Stagecraft - IFRS 9 ECL model documentation")
     canvas.drawRightString(A4[0] - 1.8 * cm, 1.1 * cm, f"Page {doc.page}")
     canvas.restoreState()
+
+
+def _sens_text(sens: pd.DataFrame) -> str:
+    def row(test, setting):
+        r = sens[(sens["test"] == test) & (sens["setting"] == setting)]
+        return r.iloc[0] if len(r) else None
+
+    base = sens.iloc[0]
+    lo, hi = row("SICR relative threshold", "1.5x"), row("SICR relative threshold", "3.0x")
+    st15, st20 = row("SICR threshold under stress staging", "1.5x"), row("SICR threshold under stress staging", "2.0x")
+    dt, sev = row("LGD", "downturn (2008-2011) LGD"), row("Single scenario (100%)", "severe")
+    parts = []
+    if lo is not None and hi is not None:
+        parts.append(f"In the booked (weighted) view, moving the relative SICR threshold from 3&times; to 1.5&times; moves "
+                     f"Stage 2 from {hi['stage2_share_upb']:.1%} to {lo['stage2_share_upb']:.1%} of the book and ECL by only "
+                     f"{lo['change_vs_model'] - hi['change_vs_model']:+.1%}. House prices had risen well above origination "
+                     "levels, so few performing loans' lifetime PDs had doubled; Stage 2 is driven by the 30-DPD backstop "
+                     "and the watchlist. The cliff is latent in good times.")
+    if st15 is not None and st20 is not None:
+        parts.append(f"Under stress staging (severe-scenario PDs), the cliff appears: Stage 2 is {st20['stage2_share_upb']:.0%} "
+                     f"of the book at 2&times; but {st15['stage2_share_upb']:.0%} at 1.5&times;, and ECL "
+                     f"{st15['ecl'] / st20['ecl']:.1f}&times; higher. That non-linearity is why the threshold is a governed "
+                     "judgment and why IFRS 9 stage transfers can amplify provisions in a downturn (pro-cyclicality).")
+    if dt is not None and sev is not None:
+        parts.append(f"Downturn LGD adds {dt['change_vs_model']:+.0%}; the severe scenario at 100% weight adds "
+                     f"{sev['change_vs_model']:+.0%}.")
+    return " ".join(parts)
 
 
 def build(runs: dict, val: dict, cfg: dict, out) -> None:
@@ -161,9 +189,11 @@ def build(runs: dict, val: dict, cfg: dict, out) -> None:
     E += [Spacer(1, 4),
           P(f"<b>Data checks</b> (full report in <font face='Courier'>docs/data_report.md</font>): {n_loans:,} loans across "
             f"{loans_df['vintage'].nunique()} vintages; {n_def:,} loans ever in default ({n_def / n_loans:.1%}); "
-            f"{n_ce:,} credit-event terminations with loss data; no duplicate loan-months and no gaps in monthly histories. "
-            "The sign convention of the Actual Loss field is detected from the data by rebuilding it from its "
-            "components, so the LGD code works whichever sign the file uses."),
+            f"{n_ce:,} credit-event terminations, almost all with loss data; no duplicate loan-months. "
+            "Actual Loss is rebuilt from its components (removal UPB, delinquent interest, expenses, net sale proceeds, "
+            "MI and non-MI recoveries) to detect its sign convention; it reconciles for over 99% of credit events. "
+            "The current release stores recoveries as negative numbers and dropped a column from the origination file "
+            "relative to the published layout; the parser handles both."),
           P("2.1 Default definition and delinquency buckets", "h2"),
           P(f"Freddie Mac reports delinquency as the number of missed monthly payments (MBA method). <b>Default</b> is the "
             f"first month with status &ge; {dd['min_dpd_status']} (three missed payments, reported as 90-119 days), REO "
@@ -232,8 +262,13 @@ def build(runs: dict, val: dict, cfg: dict, out) -> None:
           P("For each resolved default (credit-event exit with loss data on or before the reporting date) the economic LGD "
             "is (removal UPB + expenses + delinquent interest &minus; recoveries discounted at the note rate over the "
             "workout months) &divide; UPB at default, where recoveries are net sale proceeds plus MI and non-MI recoveries. "
-            "A fractional-logit severity model on current LTV at default (original LTV indexed by HPI), MI coverage and "
-            "investor occupancy supplies the macro link: scenario house prices move projected LTV, and so LGD. Effective "
+            "A fractional-logit severity model on current LTV at default (original LTV indexed by HPI), MI coverage, "
+            "investor occupancy, loan size (log UPB) and a judicial-foreclosure-state flag explains severity. Loan size "
+            "matters because foreclosure costs are partly fixed: without it the LTV effect is masked, since small, old "
+            "loans have low LTVs but high percentage losses. Judicial states (court-run foreclosure, e.g. FL, IL, NY, NJ) "
+            "add months of carrying costs. The LTV term is the macro link: scenario house prices move projected LTV, "
+            f"and so LGD (coefficient {m1['lgd'].params[1]:.2f} per 100pp of LTV, judicial {m1['lgd'].params[5]:+.2f}, "
+            f"log UPB {m1['lgd'].params[4]:+.2f} on the logit scale). Effective "
             f"LGD = P(liquidation | default) &times; severity, floored at {cfg['lgd']['floor']:.0%}. P(liquidation) "
             f"= {m1['lgd'].p_liq:.1%} for {d1}, estimated from defaults followed for {cfg['lgd']['cure_obs_months']} months. "
             "Downturn LGD = mean severity of 2008-2011 defaults by LTV band. Stage 3 LGD moves the current LTV by the "
@@ -347,14 +382,23 @@ def build(runs: dict, val: dict, cfg: dict, out) -> None:
           tbl(pd.DataFrame([bt_row(d) for d in dates], columns=[
               "Date", "Loans", "Defaults", "Observed", "Predicted (hazard)", "Predicted (Markov)", "Light", "AUC hazard",
               "AUC Markov", "Scorecard AUC in/OOT"])),
-          P(f"From {d0} the model is well calibrated in aggregate and by segment ({H0['backtest']['segments_green']} of "
-            f"{H0['backtest']['segments_total']} segments green). From {d1} the realised rate is several times the "
+          P(f"<b>From {d0}</b> the model ranks risk very well (out-of-time AUC {H0['backtest']['auc']:.2f} vs "
+            f"{H0['backtest']['auc_markov']:.2f} for the Markov challenger) and errs on the conservative side: it predicted "
+            f"{pct(H0['backtest']['predicted'])} against {pct(H0['backtest']['observed'])} observed "
+            f"({H0['backtest']['predicted'] / H0['backtest']['observed'] - 1:+.0%}; base scenario alone "
+            f"{pct(val['backtest'][d0]['overall']['predicted_pd12_base'].iloc[0])}). With {H0['backtest']['loans']:,} loans "
+            f"the binomial test rejects even a small bias, so the light is {H0['backtest']['traffic_light']} "
+            f"({H0['backtest']['segments_green']} of {H0['backtest']['segments_total']} segments green). The conservatism "
+            "sits in the prime segments (FICO 740+), where 2019 default rates were at historic lows; the riskier segments "
+            "are close to observed. Materiality matters more than significance at this sample size. "
+            f"<b>From {d1}</b> the realised rate is {H1['backtest']['observed'] / H1['backtest']['predicted']:.1f}&times; the "
             "prediction: the 2020 COVID shock (unemployment from 3.5% to 14.8% in two months) and forbearance programmes "
             "that reported paused payments as delinquency. None of the weighted scenarios anticipated a shock of that "
             "size or speed, and the 90+ DPD definition counted forborne loans as defaulted. In practice banks handled this "
             "with new scenarios and post-model overlays during 2020. Discrimination also drops, because COVID distress "
             "was less related to the origination risk factors. The scorecard's out-of-time AUC is measured on the "
-            "vintages whose 36-month window ran past the reporting date, so it is affected by the same shock."),
+            "vintages whose 36-month window ran past the reporting date, so its calibration (Figure 8) is affected by "
+            "the same shock."),
           KeepTogether([img(ch / "backtest_by_segment.png", max_h=7.5 * cm), P("Figure 7. Backtest by segment.", "small")]),
           KeepTogether([img(ch / "calibration.png", width=W * 0.6, max_h=7.5 * cm),
                         P("Figure 8. Calibration by decile of predicted PD.", "small")]),
@@ -366,11 +410,7 @@ def build(runs: dict, val: dict, cfg: dict, out) -> None:
                                    "stage2_share_loans": "Stage 2 (loans)", "stage2_share_upb": "Stage 2 (UPB)"}),
               fmt={"ECL": money, "vs model": lambda v: f"{float(v):+.1%}", "Stage 2 (loans)": pct, "Stage 2 (UPB)": pct},
               widths=[4.2 * cm, 4.2 * cm, 2.2 * cm, 1.8 * cm, 2.4 * cm, W - 14.8 * cm]),
-          P("With benign base-case conditions and house prices above origination levels, almost no Current loan's "
-            "lifetime PD has doubled since origination. Stage 2 is driven by the 30-DPD backstop and the watchlist, so "
-            "moving the relative threshold between 1.5&times; and 3&times; barely changes the allowance (the cliff is "
-            "latent). Under stress staging (severe-scenario PDs), a 1.5&times; threshold moves materially more loans into "
-            "Stage 2. Using downturn LGD is the largest single sensitivity."),
+          P(_sens_text(sens)),
           img(ch / f"sicr_cliff_{d1}.png", max_h=6 * cm)]
 
     # ------------------------------------------------------------------ limitations
@@ -378,16 +418,16 @@ def build(runs: dict, val: dict, cfg: dict, out) -> None:
         "<b>US mortgages vs other portfolios.</b> Secured, amortising, low-PD loans whose losses hinge on house prices. "
         "Unsecured retail, credit cards (revolving EAD, behavioural life), SME and corporate books need different PD "
         "drivers, CCFs and LGD models.",
-        "<b>Sample and synthetic data.</b> " + ("This run uses a simulated sample; " if syn else "")
+        ("<b>Sample and synthetic data.</b> This run uses a simulated sample; " if syn else "<b>Sample data.</b> ")
         + "Freddie Mac sample files are a 50,000-loan-per-year random sample of conforming loans acquired by one GSE, so "
         "they exclude jumbo, subprime and portfolio loans, and low-default segments have thin data.",
         "<b>Note rate as EIR proxy.</b> The effective interest rate should include fees and costs amortised over the "
         "expected life; they are not in the data. The RBI Directions allow the contractual rate on transition for the same reason.",
         "<b>Simplified prepayment.</b> One flat SMM per incentive band, with no burnout, seasoning ramp, turnover "
         "seasonality or scenario dependence. In reality a rate shock lowers prepayment and lengthens exposure.",
-        "<b>Collateral.</b> Property values are indexed with the national FHFA HPI only, with no state or MSA indices, no "
-        "property-level revaluation, no foreclosure-timeline differences between judicial and non-judicial states, "
-        "and MI is reflected only through the severity regression.",
+        "<b>Collateral.</b> Property values are indexed with the national FHFA HPI only, with no state or MSA indices and "
+        "no property-level revaluation, so regional price falls (Nevada, Florida in 2008) are understated. Judicial-state "
+        "foreclosure timelines and MI enter only as LGD regressors, not as explicit cash-flow models.",
         "<b>No management overlay.</b> An overlay (post-model adjustment) is a documented, governed top-up or release of the "
         "allowance for risks the model cannot see: COVID forbearance in 2020, a new regulation, a data gap or a known "
         "model weakness. It is quantified separately, approved by a committee and reversed when the model catches up. "
@@ -419,8 +459,10 @@ def build(runs: dict, val: dict, cfg: dict, out) -> None:
               "Current/30/60/90 buckets as in section 2.1. SMA-1 and SMA-2 accounts are Stage 2 by the backstop.",
               "<b>Prudential floors</b> [2, para 82]: for housing loans to individuals, at least 0.25% (Stage 1) and 1.5% (Stage 2), "
               "and for Stage 3 10% in the first year rising to 100% after four years (higher on any unsecured portion). "
-              f"Stagecraft's modelled Stage 1 coverage of {pct(H1['coverage']['1'])} would sit below the 0.25% floor, so an Indian bank "
-              "would hold the floor. Modelled ECL is a minimum, not the answer.",
+              f"Stagecraft's modelled coverage at {d1} is {pct(H1['coverage']['1'])} in Stage 1 (below the 0.25% floor, so an Indian bank "
+              f"would book the floor), {pct(H1['coverage']['2'])} in Stage 2 (above 1.5%) and {pct(H1['coverage']['3'])} in Stage 3 "
+              "(above the 10% first-year floor). The floors bite on the performing book, exactly where prime mortgages "
+              "model lowest.",
               "<b>Multiple probability-weighted scenarios</b> with documented expert judgement [2, paras 47-49, 69-72], as in "
               "section 3.8. Management overlays count as general provisions for Tier 2 capital [2, para 75].",
               "<b>EIR:</b> contractual rate allowed for the opening ECL, with all loans moving to EIR by 31 March 2030 "
@@ -450,7 +492,9 @@ def build(runs: dict, val: dict, cfg: dict, out) -> None:
           P("<font face='Courier'>pip install -e .  &&  python -m stagecraft.pipeline</font> rebuilds the panel, models, "
             "outputs/ and this PDF from data/raw/ (falling back to the bundled sample). Download the Freddie Mac files "
             "sample_2005.zip ... sample_2019.zip from the Single-Family Loan-Level Dataset page (free registration) into "
-            "data/raw/freddie/. Set hazard.nonevent_sample_frac to about 0.2 for the full sample to keep memory modest.")]
+            "data/raw/freddie/. The full 750,000-loan run takes about 15 minutes on a 4-core, 16 GB machine; the hazard "
+            "training panel is subsampled automatically (all defaults kept, non-defaults reweighted) to "
+            f"{cfg['hazard']['max_training_rows']:,} rows.")]
 
     doc = SimpleDocTemplate(str(out), pagesize=A4, leftMargin=1.8 * cm, rightMargin=1.8 * cm, topMargin=1.6 * cm,
                             bottomMargin=1.7 * cm, title="Stagecraft IFRS 9 ECL model documentation", author="Stagecraft")

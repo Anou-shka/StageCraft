@@ -2,8 +2,9 @@
 
     streamlit run app/streamlit_app.py
 
-Reads the bundle written by `python -m stagecraft.pipeline` (outputs/app/).
-The repository ships that bundle, built from the synthetic sample, so the app
+Reads the bundle written by `python -m stagecraft.pipeline` (outputs/app/,
+kept out of git because it is loan-level Freddie Mac data). Without it the app
+falls back to the committed synthetic demo bundle (app/demo_bundle/), so it
 runs from a fresh clone.
 """
 
@@ -29,14 +30,17 @@ st.set_page_config(page_title="Stagecraft ECL", layout="wide")
 cfg = load_config()
 dates = dashboard.available_dates()
 if not dates:
-    st.error("No results found in outputs/app. Run `python -m stagecraft.pipeline` first.")
+    st.error("No results found. Run `python -m stagecraft.pipeline` (or `--demo`) first.")
     st.stop()
 
 st.title("Stagecraft: IFRS 9 expected credit loss")
-synthetic_note = ("Bundled **synthetic** sample in the Freddie Mac file format, not real loans. "
-                  "Run the pipeline on the real Freddie Mac sample files to see real results.")
-if (ROOT / "data" / "sample" / "freddie" / "SYNTHETIC.md").exists() and not any((ROOT / "data" / "raw" / "freddie").glob("sample_*.zip")):
-    st.caption(synthetic_note)
+if dashboard.is_demo():
+    st.info("**Demo mode.** You are looking at the bundled synthetic sample (Freddie Mac file format, simulated "
+            "loans), because Freddie Mac's licence does not allow loan-level data in a public repo. The headline "
+            "results in the README come from the real data. Put the Freddie Mac sample files in `data/raw/freddie/` "
+            "and run `python -m stagecraft.pipeline` to switch this dashboard to them.")
+else:
+    st.caption("Freddie Mac Single-Family Loan-Level Dataset (sample files, 2005-2019 vintages) and FRED macro data.")
 
 with st.sidebar:
     rd = st.selectbox("Reporting date", dates, index=len(dates) - 1)
@@ -59,6 +63,9 @@ with st.sidebar:
     st.subheader("LGD")
     downturn = st.toggle("Use downturn (2008-2011) LGD", value=False)
     stress = st.toggle("Show severe stress (100% weight)", value=False)
+
+kpis = st.container()
+results = st.container()
 
 st.subheader("Macro paths")
 st.caption("Year-end unemployment rate (%) and house-price growth (% per year), years 1-5 after the reporting date. "
@@ -90,7 +97,7 @@ base_res = dashboard.compute(rd, scenarios.weights(cfg), cfg["staging"]["sicr_re
 summ = dashboard.summary(res)
 summ0 = dashboard.summary(base_res)
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4 = kpis.columns(4)
 tot, tot0 = summ.loc["Total", "ecl"], summ0.loc["Total", "ecl"]
 c1.metric("Total ECL", f"${tot / 1e6:,.2f}m", f"{tot / tot0 - 1:+.1%} vs configured")
 c2.metric("Coverage ratio", f"{summ.loc['Total', 'coverage']:.3%}")
@@ -99,7 +106,7 @@ c3.metric("Stage 2 share of book", f"{summ.loc['Stage 2', 'share_of_book']:.2%}"
 ecl_base = float(res["ecl_base"].sum())
 c4.metric("Weighted vs base ECL", f"{tot / ecl_base - 1:+.1%}" if not stress else "stress view")
 
-left, right = st.columns(2)
+left, right = results.columns(2)
 with left:
     st.markdown("**ECL and coverage by stage**")
     show = summ.copy()
@@ -107,7 +114,9 @@ with left:
     show["ecl"] = show["ecl"].map("${:,.0f}".format)
     show["coverage"] = show["coverage"].map(lambda v: f"{v:.2%}")
     show["share_of_book"] = show["share_of_book"].map(lambda v: f"{v:.2%}")
-    show["loans"] = show["loans"].astype(int)
+    show["loans"] = show["loans"].astype(int).map("{:,}".format)
+    show = show.rename(columns={"loans": "Loans", "gross_carrying_amount": "Gross carrying amount", "ecl": "ECL",
+                                "coverage": "Coverage", "share_of_book": "Share of book"})
     st.dataframe(show, width="stretch")
     mix = summ.drop("Total").reset_index(names="stage")
     st.altair_chart(
@@ -125,7 +134,8 @@ with right:
     sc = pd.DataFrame(rows)
     st.altair_chart(
         alt.Chart(sc).mark_bar(cornerRadiusEnd=4).encode(
-            x=alt.X("scenario:N", sort=["upside", "base", "weighted", "downside", "severe"], title=None),
+            x=alt.X("scenario:N", sort=["upside", "base", "weighted", "downside", "severe"], title=None,
+                    axis=alt.Axis(labelAngle=0)),
             y=alt.Y("ecl:Q", title="ECL ($)"),
             color=alt.Color("scenario:N", scale=alt.Scale(domain=list(COLORS)[3:], range=list(COLORS.values())[3:]), legend=None),
             tooltip=["scenario", alt.Tooltip("ecl:Q", format="$,.0f")],

@@ -85,7 +85,7 @@ write your own, in your words, then rehearse them out loud.
 
     &nbsp;
 
-19. Why does Stage 3 coverage look low (about 6%) compared with an unsecured book?
+19. Why is Stage 3 coverage only about 26% for mortgages, compared with 60%+ for an unsecured book?
 
     &nbsp;
 
@@ -147,7 +147,7 @@ write your own, in your words, then rehearse them out loud.
 
     &nbsp;
 
-33. Your shipped results are on synthetic data. How do you know the pipeline would work on real data?
+33. The public repo can't hold Freddie Mac loan-level data. How would someone reproduce your results, and what does the demo mode show?
 
     &nbsp;
 
@@ -161,7 +161,7 @@ write your own, in your words, then rehearse them out loud.
 
     &nbsp;
 
-36. The RBI's Stage 1 floor for housing loans is 0.25%. Your model says 0.04%. What does a bank book, and what is the
+36. The RBI's Stage 1 floor for housing loans is 0.25%. Your model says 0.10%. What does a bank book, and what is the
     point of the model then?
 
     &nbsp;

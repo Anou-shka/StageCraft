@@ -4,7 +4,8 @@ One entry per milestone: what was built, the three choices that matter most, and
 could ask. The whole build was done in one pass (at your request), so every milestone is written up here. The
 `[RISK TO REVIEW]` calls are drafts waiting for your sign-off; see section 4 of the PDF.
 
-> All numbers quoted come from the **synthetic** sample. They will change when you run on the real files.
+> Numbers quoted are from the real Freddie Mac run (750,000 loans). M1–M7 were first built and tested on a synthetic sample
+> in the same file format; M8 records what changed when the real data arrived.
 
 ---
 
@@ -40,7 +41,7 @@ exact file format, driven by real FRED history.
 **Built.** `buckets.py` assigns monthly states (Current / 30 / 60 / Default / Prepaid / Censored) and builds the
 enriched panel: HPI-indexed current LTV, default entry, months since last default, modification, forbearance and
 deferral flags. `scorecard.py` is a logistic regression of default within 36 months on origination data, trained only
-on loans whose 36-month window closed by the reporting date. Synthetic results: AUC 0.79 in-sample, 0.61 out-of-time
+on loans whose 36-month window closed by the reporting date. Real data: AUC 0.84 in-sample, 0.74 out-of-time
 (the out-of-time window includes COVID).
 
 **Three choices.**
@@ -88,7 +89,7 @@ each other at 5 years (`outputs/charts/pd_term_structure.png`).
 A fractional-logit severity on current LTV, MI and investor occupancy provides the macro link. A cure rate converts
 severity to effective LGD, and the 2008–11 downturn table is kept for sensitivity. `ead.py` does contractual
 amortisation plus deferred UPB, and SMM by refinancing-incentive band. `ecl.py` is the survival-weighted ECL.
-`staging.py` holds the stage rules. Synthetic coverage at 2019: Stage 1 0.04%, Stage 2 1.6%, Stage 3 6.0%.
+`staging.py` holds the stage rules. Coverage at Dec 2019: Stage 1 0.10%, Stage 2 4.5%, Stage 3 26%.
 
 **Three choices.**
 1. *Prepayment enters once, in survival.* Marginal PD = S(t-1) × h(t) with S including prepayment, and EAD is the
@@ -163,3 +164,32 @@ auto-updated results block, `docs/case-study.md`, `docs/defence.md` (35 question
 - What's the single biggest limitation of this model for a real bank?
 - How would you adapt it for an Indian housing-finance book under the 2026 Directions?
 - What would model validation challenge first?
+
+---
+
+## M8. Real data
+
+**Built.** Pulled the 15 Freddie Mac sample files (750,000 loans, 48.5 million loan-months) and ran the full pipeline. The real
+files differed from the published layout:
+- **Origination file:** 31 columns, because servicer name and MI cancellation moved to the performance file.
+- **Performance file:** renamed `sample_perf_YYYY.txt`.
+- **Codes and signs:** delinquency codes are zero-padded, and recoveries are negative.
+
+The parser, the loss-sign check and the LGD now handle all of these, with tests. Three changes for scale:
+- the panel is built one vintage at a time;
+- the hazard training panel is subsampled to 6 million rows (all defaults kept, non-defaults reweighted);
+- the loan-level dashboard bundle stays out of git under Freddie's licence, with a synthetic demo bundle committed instead.
+
+**Three choices.**
+1. *Reconcile before trusting.* Rebuilding Actual Loss from its components exposed the sign change: 0.2% match before the fix,
+   99.4% after. Without it, recoveries would have *increased* losses.
+2. *Add loan size and judicial state to LGD.* On real data, severity first appeared to *fall* with LTV. Small, old loans have low
+   LTV but high percentage losses, and judicial-foreclosure states run about 12 points higher. Controlling for both restores a
+   positive LTV slope.
+3. *Report the red 2018 backtest honestly.* With 308,000 loans the binomial test flags any bias. The useful finding is the
+   direction: conservative in Stage 1, too low in Stage 2.
+
+**Interview questions.**
+- What did you find when you reconciled the loss fields?
+- Why did severity fall with LTV at first, and how did you fix it?
+- Your backtest is statistically red but conservative overall. Is that a pass?

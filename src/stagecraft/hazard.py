@@ -75,7 +75,8 @@ def features(score, age, cltv, status, h, modified, assisted, prior_default, dur
     k = n_transient(cfg)
     cuts = cfg["hazard"]["horizon_buckets"]
     nb = len(cuts) + 1
-    c = np.clip(cltv, 0, 200) / 100
+    # A missing original LTV (a handful of loans) is treated as 80%, the modal value.
+    c = np.clip(np.nan_to_num(np.asarray(cltv, dtype=float), nan=80.0), 0, 200) / 100
     f = {
         "score": score,
         "age_0_12": np.minimum(age, 12) / 12,
@@ -140,8 +141,15 @@ def training_panel(panel: pl.LazyFrame, scores: pl.DataFrame, macro: pd.DataFram
     H = cfg["hazard"]["max_horizon"]
     base = panel.select("loan_id", "mi", "state", "default_entry", "cltv", "age_fpd", "modified", "assisted",
                         "prior_default").filter(pl.col("mi") <= rd)
+    snaps = snapshots(reporting_date, cfg)
+    # Size the panel first, then keep every default row and a hash-based
+    # random share of the non-default rows so the panel stays under
+    # `max_training_rows`; weights 1/share restore the population.
+    counts = (base.filter(pl.col("mi").is_in(snaps) & (pl.col("state") < k)).group_by("mi").len().collect())
+    est = sum(int(n) * min(H, rd - int(m)) for m, n in counts.iter_rows())
+    frac = min(1.0, cfg["hazard"]["nonevent_sample_frac"], cfg["hazard"]["max_training_rows"] / max(est, 1))
     frames = []
-    for s in snapshots(reporting_date, cfg):
+    for s in snaps:
         snap = base.filter((pl.col("mi") == s) & (pl.col("state") < k)).select(
             "loan_id", pl.col("state").alias("s_status"), pl.col("modified").alias("s_mod"),
             pl.col("assisted").alias("s_assist"), pl.col("prior_default").alias("s_prior"))
@@ -155,16 +163,14 @@ def training_panel(panel: pl.LazyFrame, scores: pl.DataFrame, macro: pd.DataFram
             .filter((pl.col("state") < k) | pl.col("state").is_in([DEFAULT, PREPAID, CENSORED]))
             .select("loan_id", "mi", (pl.col("mi") - s).alias("h"), pl.col("default_entry").alias("y"),
                     "cltv", "age_fpd", "s_status", "s_mod", "s_assist", "s_prior")
+            .filter(at_risk(pl.col("s_status"), pl.col("h"), cfg))
         )
-        frames.append(fol)
-    df = pl.concat(frames).join(scores.lazy(), on="loan_id", how="left").collect()
-    df = df.filter(at_risk(pl.col("s_status"), pl.col("h"), cfg))
-    frac = cfg["hazard"]["nonevent_sample_frac"]
-    if frac < 1:
-        keep = df["y"] | (pl.Series(np.random.default_rng(seed).random(df.height)) < frac)
-        df = df.filter(keep).with_columns(pl.when(pl.col("y")).then(1.0).otherwise(1 / frac).alias("w"))
-    else:
-        df = df.with_columns(pl.lit(1.0).alias("w"))
+        if frac < 1:
+            u = (pl.struct("loan_id", "mi", "h").hash(seed + s) % 1_000_000).cast(pl.Float64) / 1_000_000
+            fol = fol.filter(pl.col("y") | (u < frac))
+        frames.append(fol.collect())
+    df = pl.concat(frames).join(scores, on="loan_id", how="left")
+    df = df.with_columns(pl.when(pl.col("y")).then(1.0).otherwise(1 / frac).alias("w"))
     out = df.to_pandas()
     m = macro.reindex(out["mi"].to_numpy())
     out["dur12"] = m["dur12"].to_numpy()

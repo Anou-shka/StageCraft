@@ -141,7 +141,8 @@ def save(run: dict, cfg: dict) -> None:
         json.dump({"cure": m["cure"], "scorecard_n": m["scorecard"].n_train, "hazard_rows": m["hazard"].n_rows,
                    "hazard_events": m["hazard"].n_events, "lgd_n": m["lgd"].n}, f, indent=2)
     pd.DataFrame(run["curves"]).rename_axis("month").to_csv(md / "pd_term_structure.csv")
-    run["res"].to_parquet(out / f"loan_ecl_{rd}.parquet", index=False)
+    if not cfg.get("_demo"):
+        run["res"].to_parquet(out / f"loan_ecl_{rd}.parquet", index=False)
 
     # Bundle for the dashboard: models + snapshot + macro history.
     app = path(cfg, "app_bundle")
@@ -150,17 +151,32 @@ def save(run: dict, cfg: dict) -> None:
     with open(app / f"models_{rd}.pkl", "wb") as f:
         pickle.dump(keep, f)
     run["snap"].to_parquet(app / f"snapshot_{rd}.parquet", index=False)
+    (app / "SOURCE.txt").write_text("synthetic\n" if load.is_synthetic(cfg) else "freddie\n")
     run["res"].to_parquet(app / f"results_{rd}.parquet", index=False)
 
 
-def run(cfg: dict | None = None, pdf: bool = True, dump: bool = True) -> dict:
+def demo_config() -> dict:
+    """Config for building the dashboard's demo bundle from the synthetic
+    sample, in separate folders so it never touches a real-data run."""
+    import copy
+
+    cfg = copy.deepcopy(load_config())
+    cfg["paths"].update({"interim": "data/interim_demo", "processed": "data/processed_demo",
+                         "outputs": "data/processed_demo/outputs", "app_bundle": "app/demo_bundle"})
+    cfg["_demo"] = True
+    return cfg
+
+
+def run(cfg: dict | None = None, pdf: bool = True, dump: bool = True, source: str = "auto") -> dict:
     cfg = cfg or load_config()
     from . import report, validation
 
-    log(f"parsing {load.source_dir(cfg)}")
-    manifest = load.build(cfg)
+    src = {"auto": load.source_dir(cfg), "raw": path(cfg, "raw_freddie"), "sample": path(cfg, "sample_freddie")}[source]
+    log(f"parsing {src}")
+    manifest = load.build(cfg, src)
     buckets.build_panel(cfg)
-    datacheck.write_report(cfg)
+    if not cfg.get("_demo"):
+        datacheck.write_report(cfg)
     log(f"panel built ({'SYNTHETIC sample' if manifest['synthetic'] else 'Freddie Mac data'})")
     hist = macro.load_macro(cfg)
     hist.to_csv(path(cfg, "app_bundle").mkdir(parents=True, exist_ok=True) or path(cfg, "app_bundle") / "macro_history.csv")
@@ -176,7 +192,7 @@ def run(cfg: dict | None = None, pdf: bool = True, dump: bool = True) -> dict:
     val = validation.run_all(runs, cfg, hist)
     log("charts and tables")
     report.outputs(runs, val, cfg)
-    if pdf:
+    if pdf and not cfg.get("_demo"):
         log("model documentation PDF")
         report.build_pdf(runs, val, cfg)
     log("done")
@@ -186,8 +202,15 @@ def run(cfg: dict | None = None, pdf: bool = True, dump: bool = True) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-pdf", action="store_true")
+    ap.add_argument("--source", choices=["auto", "raw", "sample"], default="auto",
+                    help="auto = data/raw/freddie if it has files, else the bundled synthetic sample")
+    ap.add_argument("--demo", action="store_true",
+                    help="rebuild the dashboard's committed demo bundle (app/demo_bundle) from the synthetic sample")
     a = ap.parse_args()
-    run(pdf=not a.no_pdf)
+    if a.demo:
+        run(demo_config(), pdf=False, dump=False, source="sample")
+    else:
+        run(pdf=not a.no_pdf, source=a.source)
 
 
 if __name__ == "__main__":

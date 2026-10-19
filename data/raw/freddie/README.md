@@ -6,7 +6,7 @@
 
    `sample_2005.zip`, `sample_2006.zip`, ..., `sample_2019.zip` (15 files)
 
-   Each contains `sample_orig_YYYY.txt` (origination) and `sample_svcg_YYYY.txt`
+   Each contains `sample_orig_YYYY.txt` (origination) and `sample_perf_YYYY.txt` (`sample_svcg_YYYY.txt` in older releases)
    (monthly performance through the latest cut-off, so post-2019 validation data is included).
 3. Drop the zips into this folder unchanged (no need to unzip) and run
    `python -m stagecraft.pipeline`.

@@ -149,7 +149,8 @@ def outputs(runs: dict, val: dict, cfg) -> dict:
     h = headline(runs, val, cfg)
     with open(out / "headline.json", "w") as f:
         json.dump(h, f, indent=2, default=float)
-    update_readme(h)
+    if not cfg.get("_demo"):
+        update_readme(h)
     return h
 
 

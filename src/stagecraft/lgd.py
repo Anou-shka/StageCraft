@@ -8,11 +8,13 @@
    where recoveries = net sale proceeds + MI + non-MI recoveries and DF
    discounts at the note rate from default to disposition.
 2. Severity model: fractional logit of LGD on current LTV at default
-   (a single slope, so severity can only rise as LTV rises; a hinge at 100%
-   was tested but too few defaults sit above 100% to estimate it)
-   (original LTV indexed by HPI), MI coverage and investor occupancy. The
-   current-LTV term is the macro link: scenario house prices move LTV, so
-   they move LGD.
+   (original LTV indexed by HPI; one slope, so severity can only rise with
+   LTV), MI coverage, investor occupancy, loan size (log UPB: fixed
+   foreclosure costs weigh more on small loans) and a judicial-foreclosure
+   state flag (court-supervised foreclosure takes longer, so more interest,
+   taxes and upkeep accrue). Without the size term the LTV slope is masked:
+   small, old loans have low LTV and high percentage losses. The current-LTV
+   term is the macro link: scenario house prices move LTV, so they move LGD.
 3. Cure adjustment: effective LGD = P(liquidation | default) x severity,
    because a share of defaults cure with (almost) no loss.
 4. Downturn LGD: severity observed for defaults in 2008-2011, by LTV band.
@@ -43,7 +45,8 @@ def resolved_defaults(loans: pl.DataFrame, orig: pl.DataFrame, hpi: pd.Series, r
     d = loans.filter(
         pl.col("exit_code").is_in(cfg["default_definition"]["credit_event_zb_codes"])
         & pl.col("actual_loss").is_not_null() & (pl.col("exit_mi") <= rd) & pl.col("default_mi").is_not_null()
-    ).join(orig.select("loan_id", "ltv", "orig_upb", "fpd_mi", "mi_pct", "occupancy", "orig_rate"), on="loan_id").to_pandas()
+    ).join(orig.select("loan_id", "ltv", "orig_upb", "fpd_mi", "mi_pct", "occupancy", "orig_rate", "property_state"),
+           on="loan_id").to_pandas()
     if d.empty:
         return d
     d["upb_def"] = d["upb_at_default"].where(d["upb_at_default"] > 0, d["zb_removal_upb"])
@@ -51,8 +54,10 @@ def resolved_defaults(loans: pl.DataFrame, orig: pl.DataFrame, hpi: pd.Series, r
     rate = d["last_rate"].fillna(d["orig_rate"]) / 1200
     months = (d["exit_mi"] - d["default_mi"]).clip(lower=0)
     dfac = (1 + rate) ** (-months)
-    rec = d["net_sales_proceeds"] + d["mi_recoveries"].fillna(0) + d["non_mi_recoveries"].fillna(0)
-    cost = d["expenses"].fillna(0).abs() + d["dai"].fillna(0)
+    # Freddie Mac's sign conventions for the components differ between
+    # releases (recoveries negative in the current files), so use magnitudes.
+    rec = d["net_sales_proceeds"].abs() + d["mi_recoveries"].fillna(0).abs() + d["non_mi_recoveries"].fillna(0).abs()
+    cost = d["expenses"].fillna(0).abs() + d["dai"].fillna(0).abs()
     econ = (d["zb_removal_upb"] + cost - rec * dfac) / d["upb_def"]
     use_econ = cfg["lgd"]["discount_recoveries"] & rec.notna()
     d["lgd"] = np.where(use_econ, econ, d["lgd_acct"])
@@ -86,9 +91,20 @@ def cure_rate(panel: pl.LazyFrame, loans: pl.DataFrame, reporting_date: str, cfg
     return {"n_defaults": n, "cure_rate": cured, "p_liquidation": 1 - cured}
 
 
-def _design(cltv, mi_pct, investor) -> np.ndarray:
-    c = np.clip(np.asarray(cltv, float), 0, 250) / 100
-    return np.column_stack([np.ones_like(c), c, np.asarray(mi_pct, float) / 100, np.asarray(investor, float)])
+# States where foreclosure goes through the courts (standard industry list).
+JUDICIAL_STATES = {"CT", "DE", "FL", "HI", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "NE", "NJ", "NM", "NY", "ND",
+                   "OH", "OK", "PA", "SC", "VT", "WI"}
+
+
+def judicial(state) -> np.ndarray:
+    return pd.Series(np.asarray(state, dtype=object)).isin(JUDICIAL_STATES).to_numpy().astype(float)
+
+
+def _design(cltv, mi_pct, investor, upb, judicial_flag) -> list:
+    c = np.clip(np.nan_to_num(np.asarray(cltv, dtype=float), nan=80.0), 0, 250) / 100  # missing LTV -> modal 80%
+    lu = np.log(np.clip(np.asarray(upb, dtype=float), 10_000, None)) - np.log(160_000)
+    return [np.ones_like(c * lu), c, np.asarray(mi_pct, float) / 100, np.asarray(investor, float), lu,
+            np.asarray(judicial_flag, float)]
 
 
 @dataclass
@@ -104,19 +120,19 @@ class LGDModel:
     n: int
     band_cuts: list
 
-    names = ["const", "cltv", "mi_pct", "investor"]
+    names = ["const", "cltv", "mi_pct", "investor", "log_upb", "judicial_state"]
 
-    def severity(self, cltv, mi_pct, investor):
-        eta = self.params[0] + self.params[1] * np.clip(cltv, 0, 250) / 100 \
-            + self.params[2] * np.asarray(mi_pct) / 100 + self.params[3] * np.asarray(investor)
+    def severity(self, cltv, mi_pct, investor, upb, judicial_flag):
+        eta = sum(b * x for b, x in zip(self.params, _design(cltv, mi_pct, investor, upb, judicial_flag)))
         return 1 / (1 + np.exp(-eta))
 
-    def effective(self, cltv, mi_pct, investor):
-        sev = self.severity(cltv, mi_pct, investor)
+    def effective(self, cltv, mi_pct, investor, upb, judicial_flag):
+        sev = self.severity(cltv, mi_pct, investor, upb, judicial_flag)
         p = self.p_liq if self.apply_cure else 1.0
         return np.clip(p * sev, self.floor, self.cap)
 
     def downturn_effective(self, cltv):
+        cltv = np.nan_to_num(np.asarray(cltv, dtype=float), nan=80.0)
         b = band(cltv, self.band_cuts)
         dt = self.downturn.set_index("ltv_band")["mean_lgd"]
         overall = self.downturn.attrs.get("overall", float(dt.mean()) if len(dt) else 0.3)
@@ -137,8 +153,10 @@ def _band_table(d: pd.DataFrame, min_obs: int) -> pd.DataFrame:
 
 def fit(d: pd.DataFrame, cure: dict, cfg: dict) -> LGDModel:
     c = cfg["lgd"]
+    d = d[np.isfinite(d["cltv_def"]) & np.isfinite(d["lgd"])]
     y = d["lgd"].clip(0, 1).to_numpy()
-    X = _design(d["cltv_def"], d["mi_pct"].fillna(0), d["occupancy"] == "I")
+    X = np.column_stack(_design(d["cltv_def"], d["mi_pct"].fillna(0), d["occupancy"] == "I", d["upb_def"],
+                                judicial(d["property_state"])))
     # Fractional logit (Papke-Wooldridge): binomial quasi-likelihood on y in [0,1].
     res = sm.GLM(y, X, family=sm.families.Binomial()).fit(cov_type="HC0")
     y0, y1 = c["downturn_years"]

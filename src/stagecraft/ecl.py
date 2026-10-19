@@ -25,6 +25,7 @@ import pandas as pd
 from . import hazard as hz
 from .dates import date_to_mi
 from .ead import balance_schedule
+from .lgd import judicial
 
 
 def survival_components(h: np.ndarray, smm: np.ndarray, ead: np.ndarray, lgd: np.ndarray, rate: np.ndarray,
@@ -100,7 +101,8 @@ def project(snap: pd.DataFrame, path: pd.DataFrame, reporting_date: str, model: 
         h = 1 / (1 + np.exp(-model.eta(f)))
         h = np.where(hz.at_risk(status, t, cfg), h, 0.0)
         lgd = lgdm.effective(cltv, s["mi_pct"].fillna(0).to_numpy()[:, None],
-                             (s["occupancy"] == "I").to_numpy()[:, None])
+                             (s["occupancy"] == "I").to_numpy()[:, None], s["upb"].to_numpy()[:, None],
+                             judicial(s["property_state"])[:, None])
         c = survival_components(h, smm[lo: lo + n], ead, lgd, s["current_rate"].to_numpy(), rem, T12)
         for k in out:
             out[k][lo: lo + n] = c[k]
@@ -123,7 +125,8 @@ def stage3_lgd(snap: pd.DataFrame, path: pd.DataFrame, reporting_date: str, lgdm
     hpi_w = path["hpi"].get(rd + W)
     cltv_now = snap["ltv"] * snap["upb"] / snap["orig_upb"] * snap["hpi_orig"] / hpi_now
     cltv_w = cltv_now * hpi_now / hpi_w
-    return lgdm.effective(cltv_w.to_numpy(), snap["mi_pct"].fillna(0).to_numpy(), (snap["occupancy"] == "I").to_numpy())
+    return lgdm.effective(cltv_w.to_numpy(), snap["mi_pct"].fillna(0).to_numpy(), (snap["occupancy"] == "I").to_numpy(),
+                          snap["upb"].to_numpy(), judicial(snap["property_state"]))
 
 
 def stage_ecl(stage: np.ndarray, ecl12: np.ndarray, ecl_life: np.ndarray, ecl3: np.ndarray) -> np.ndarray:

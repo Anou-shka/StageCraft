@@ -7,3 +7,6 @@ data/processed/
 data/raw/freddie/*
 !data/raw/freddie/README.md
 outputs/loan_ecl_*.parquet
+data/interim_demo/
+data/processed_demo/
+outputs/app/

@@ -20,10 +20,24 @@ from . import ecl, scenarios, staging
 from .config import load_config, path
 
 
+def bundle_dir():
+    """Real-data bundle (outputs/app, written by a local pipeline run and kept
+    out of git) if present, else the committed synthetic demo bundle."""
+    real = path(load_config(), "app_bundle")
+    if any(real.glob("results_*.parquet")):
+        return real
+    from .config import ROOT
+    return ROOT / "app" / "demo_bundle"
+
+
+def is_demo() -> bool:
+    f = bundle_dir() / "SOURCE.txt"
+    return not f.exists() or f.read_text().strip() != "freddie"
+
+
 @lru_cache(maxsize=4)
 def bundle(rd: str) -> dict:
-    cfg = load_config()
-    app = path(cfg, "app_bundle")
+    app = bundle_dir()
     with open(app / f"models_{rd}.pkl", "rb") as f:
         models = pickle.load(f)
     hist = pd.read_csv(app / "macro_history.csv", index_col=0)
@@ -33,7 +47,7 @@ def bundle(rd: str) -> dict:
 
 def available_dates() -> list[str]:
     cfg = load_config()
-    app = path(cfg, "app_bundle")
+    app = bundle_dir()
     return [d for d in cfg["reporting_dates"] if (app / f"results_{d}.parquet").exists()]
 
 
