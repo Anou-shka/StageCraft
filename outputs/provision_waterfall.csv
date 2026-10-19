@@ -1,0 +1,10 @@
+line,amount
+Opening ECL 2018-12-31,1536053.840287187
+New originations,136114.9385379096
+"Derecognitions (repaid, prepaid, sold)",-89653.80576931316
+Transfers to Stage 1,-6035.778472759625
+Transfers to Stage 2,13271.947155692802
+Transfers to Stage 3,488367.59235812176
+"Remeasurement (PD, LGD, EAD, macro)",-227442.35882933368
+Write-offs,-479198.6592790495
+Closing ECL 2019-12-31,1371477.7159884549

@@ -1,0 +1,2 @@
+group,loans,defaults,observed_rate,predicted_pd12_weighted,predicted_pd12_base,predicted_pd12_markov,p_value,traffic_light
+All,5125,218,0.04253658536585366,0.008172073789544407,0.007826660169790995,0.007988174815595326,3.1201552388003063e-83,red

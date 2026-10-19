@@ -1,0 +1,220 @@
+# =============================================================================
+# Stagecraft: every modelling assumption in one place.
+#
+# Items tagged [RISK TO REVIEW] are judgment calls that belong to the model
+# owner (Anoushka). Each one has a draft value and a one-line rationale. Change
+# the value here and rerun `python -m stagecraft.pipeline`. Nothing else in the
+# code hard-codes these numbers.
+# =============================================================================
+
+paths:
+  raw_freddie: data/raw/freddie          # put Freddie Mac sample_YYYY.zip files here
+  sample_freddie: data/sample/freddie    # bundled synthetic sample (used if raw is empty)
+  raw_macro: data/raw/macro              # FRED CSVs: UNRATE, USSTHPI, MORTGAGE30US
+  interim: data/interim                  # unzipped text files (cache, git-ignored)
+  processed: data/processed              # Parquet panel (git-ignored)
+  outputs: outputs                       # CSVs and charts
+  app_bundle: outputs/app                # small files the Streamlit app reads
+
+# Reporting dates. Each estimate made "as at" a date may only use data up to it.
+reporting_dates: ["2018-12-31", "2019-12-31"]
+
+# Origination years in scope (Freddie Mac sample files sample_2005 ... sample_2019).
+vintages: [2005, 2019]
+
+# -----------------------------------------------------------------------------
+# 3.1 Default definition and delinquency buckets
+# -----------------------------------------------------------------------------
+default_definition:
+  # [RISK TO REVIEW] Freddie Mac delinquency status is a count of missed monthly
+  # payments (MBA method): 3 = "90-119 days delinquent". Status >= 3 is the US
+  # D90 convention and matches IFRS 9's 90-day rebuttable presumption (B5.5.37).
+  # The strict RBI ">90 days overdue" reading at a month-end snapshot would be
+  # status >= 4 (one month later). See docs/methodology note in the report.
+  min_dpd_status: 3
+  # [RISK TO REVIEW] Zero-balance codes treated as credit events (default):
+  # 02 third-party sale, 03 short sale / charge-off, 09 REO disposition,
+  # 15 whole-loan sale (in practice non-performing loan sales; Freddie computes
+  # an actual loss for them).
+  credit_event_zb_codes: ["02", "03", "09", "15"]
+  # "RA" (REO acquired) delinquency status counts as default.
+  reo_status_is_default: true
+  # Voluntary payoff / maturity: absorbing "prepaid/closed" state.
+  prepay_zb_codes: ["01"]
+  # Exits that are neither default nor voluntary prepayment: the loan is
+  # censored (it leaves the risk set without an outcome).
+  # 16 reperforming-loan securitisation, 96 defect (repurchased by seller).
+  censor_zb_codes: ["16", "96"]
+
+# Risk segments used for the Markov model, CPR, reporting and backtests.
+segments:
+  fico_cuts: [680, 740]        # bands: <680, 680-739, 740+
+  ltv_cuts: [80, 95]           # current (HPI-indexed) LTV bands: <=80, 80-95, >95
+
+# -----------------------------------------------------------------------------
+# 3.2 Staging
+# -----------------------------------------------------------------------------
+staging:
+  # [RISK TO REVIEW] 30+ DPD backstop = Freddie status >= 1 (one missed payment
+  # at the month-end snapshot). IFRS 9 5.5.11 rebuttable presumption.
+  backstop_min_status: 1
+  # [RISK TO REVIEW] Relative SICR test: current lifetime PD >= multiple x the
+  # lifetime PD expected at origination for the same remaining term ...
+  sicr_relative_multiple: 2.0
+  # ... AND an absolute increase of at least this many basis points (stops tiny
+  # PDs doubling from 5bp to 10bp from triggering Stage 2).
+  sicr_absolute_bp: 50
+  # Which lifetime PD feeds the SICR test: "weighted" (probability-weighted
+  # across scenarios) or "base".
+  sicr_pd_basis: weighted
+  # [RISK TO REVIEW] Qualitative watchlist triggers (Freddie fields):
+  watchlist:
+    modification: true          # Modification Flag Y/P: modified loans stay Stage 2
+    borrower_assistance: true   # Borrower Assistance Status F/R/T (forbearance etc.)
+    payment_deferral: true      # Payment Deferral Flag Y/P
+  # [RISK TO REVIEW] A loan that has been in default stays Stage 3 until it has
+  # performed (status 0) for this many consecutive months (cure probation).
+  stage3_probation_months: 6
+
+# -----------------------------------------------------------------------------
+# Origination scorecard (feeds the origination PD used in the SICR test)
+# -----------------------------------------------------------------------------
+scorecard:
+  target_months: 36            # default within 36 months of first payment
+  min_train_vintage: 2005
+
+# -----------------------------------------------------------------------------
+# 3.3 PD models
+# -----------------------------------------------------------------------------
+markov:
+  # Transitions observed in the window (reporting_date - window, reporting_date].
+  window_months: 36
+  # Credibility weight: each segment row is blended with the pooled row as
+  # (counts + a * pooled) / (n + a) with a = this many pseudo-observations.
+  min_obs_per_row: 200
+
+hazard:
+  # Snapshot months used to build the (snapshot, horizon) training panel.
+  snapshot_months: [6, 12]
+  first_snapshot: "2005-06-30"
+  max_horizon: 60              # months followed after each snapshot
+  # Keep this share of non-default rows (events always kept); weights restore
+  # the population. 1.0 = no sampling. Lower it for the full dataset.
+  nonevent_sample_frac: 1.0
+  horizon_buckets: [3, 6, 12, 24]   # how fast a delinquency signal decays
+  # Ridge penalty (in pseudo-observations) on the hazard coefficients; keeps
+  # sparse status x horizon cells finite. Small relative to the row count.
+  l2_penalty: 1.0
+  # [RISK TO REVIEW] Seasoning: do not let the hazard rise with age beyond
+  # 6 years (that slope is confounded with the crisis cohorts before 2019).
+  age_monotone_after_72: true
+  # Loans originated up to this year carry a "legacy underwriting" flag
+  # (pre-crisis products and documentation standards).
+  legacy_vintage_max: 2008
+
+# -----------------------------------------------------------------------------
+# 3.4 LGD
+# -----------------------------------------------------------------------------
+lgd:
+  ltv_band_cuts: [60, 80, 100, 120]   # current-LTV bands for the LGD table
+  # [RISK TO REVIEW] Floor on modelled LGD (secured mortgage, but costs and
+  # time to foreclose never go to zero).
+  floor: 0.05
+  cap: 1.0
+  downturn_years: [2008, 2011]        # defaults in this window = downturn LGD
+  # Economic LGD: discount recoveries back to the default date at the note
+  # rate over the observed workout period.
+  discount_recoveries: true
+  # [RISK TO REVIEW] Not every default ends in a loss: some cure. Effective LGD
+  # = P(liquidation | default) x severity. Estimated from defaults with at least
+  # `cure_obs_months` of follow-up before the reporting date.
+  apply_cure_rate: true
+  cure_obs_months: 24
+  # Months from default to disposition assumed when projecting Stage 3 LGD
+  # (house prices keep moving during the workout under each scenario).
+  stage3_workout_months: 18
+  min_obs_per_band: 10
+
+# -----------------------------------------------------------------------------
+# 3.5 EAD and prepayment
+# -----------------------------------------------------------------------------
+prepayment:
+  window_months: 36                    # CPR estimated over this look-back
+  # Segment CPR by refinancing incentive = note rate - market mortgage rate (pp).
+  incentive_cuts: [-0.5, 0.5, 1.5]
+  # [RISK TO REVIEW] Prepayment held flat at the estimated CPR for the whole
+  # projection (no scenario dependence).
+  scenario_dependent: false
+
+# -----------------------------------------------------------------------------
+# 3.6 ECL
+# -----------------------------------------------------------------------------
+ecl:
+  stage1_horizon_months: 12
+  max_lifetime_months: 480
+  # Discount at the loan's current note rate (EIR proxy).
+  discount_rate: note_rate
+
+# -----------------------------------------------------------------------------
+# Macro data
+# -----------------------------------------------------------------------------
+macro:
+  # USSTHPI is quarterly (dated the first day of the quarter). Each value is
+  # placed at the middle month of its quarter and log-linearly interpolated.
+  hpi_interpolation: log_linear_mid_quarter
+  # No look-ahead: data published after the reporting date is not used. UNRATE
+  # for month m is published early in m+1; the FHFA HPI for a quarter about
+  # two months after quarter end.
+  ur_publication_lag_months: 1
+  hpi_publication_lag_months: 3
+  # Long-run anchors that scenarios revert to after year 5.
+  long_run_unemployment: 4.5
+  long_run_hpi_growth: 3.0     # % per year
+  reversion_years: 2           # years 6-7: linear glide to the long-run values
+
+# -----------------------------------------------------------------------------
+# 3.7 Forward-looking scenarios  [RISK TO REVIEW: paths and weights]
+# Year-end unemployment rate (%) and house-price growth (% over the year) for
+# years 1-5 after each reporting date. Month 0 starts from the last data known
+# at the reporting date and moves linearly to the year-1 value.
+# -----------------------------------------------------------------------------
+scenarios:
+  weights:            # must sum to 1 across the weighted scenarios
+    base: 0.60
+    upside: 0.20
+    downside: 0.20
+  stress_only: [severe]
+  paths:
+    "2018-12-31":
+      base:     {unemployment: [3.7, 3.9, 4.2, 4.4, 4.5], hpi_growth: [4.5, 4.0, 3.5, 3.0, 3.0]}
+      upside:   {unemployment: [3.4, 3.4, 3.6, 3.9, 4.2], hpi_growth: [6.5, 5.5, 4.5, 3.5, 3.0]}
+      downside: {unemployment: [5.5, 7.0, 6.5, 5.8, 5.2], hpi_growth: [-4.0, -3.0, 1.0, 2.5, 3.0]}
+      severe:   {unemployment: [8.0, 10.0, 9.5, 8.5, 7.5], hpi_growth: [-12.0, -10.0, -2.0, 2.0, 3.0]}
+    "2019-12-31":
+      base:     {unemployment: [3.6, 3.8, 4.1, 4.3, 4.5], hpi_growth: [4.0, 3.5, 3.0, 3.0, 3.0]}
+      upside:   {unemployment: [3.3, 3.3, 3.5, 3.8, 4.1], hpi_growth: [6.0, 5.0, 4.0, 3.5, 3.0]}
+      downside: {unemployment: [5.5, 7.0, 6.5, 5.8, 5.2], hpi_growth: [-4.0, -3.0, 1.0, 2.5, 3.0]}
+      severe:   {unemployment: [8.0, 10.0, 9.5, 8.5, 7.5], hpi_growth: [-12.0, -10.0, -2.0, 2.0, 3.0]}
+
+# -----------------------------------------------------------------------------
+# 3.8 Validation and sensitivities
+# -----------------------------------------------------------------------------
+validation:
+  backtest_horizon_months: 12
+  sicr_multiples: [1.5, 2.0, 3.0]
+  alt_weights:
+    "downside heavy (40/10/50)": {base: 0.40, upside: 0.10, downside: 0.50}
+    "base heavy (80/10/10)":     {base: 0.80, upside: 0.10, downside: 0.10}
+    "equal (34/33/33)":          {base: 0.34, upside: 0.33, downside: 0.33}
+
+# Management overlay: not modelled (see report, Limitations). Kept here so the
+# owner can book one explicitly, as a % uplift on modelled ECL by stage.
+overlay:
+  enabled: false
+  pct_by_stage: {1: 0.0, 2: 0.0, 3: 0.0}
+
+# Synthetic sample generator (only used to build the bundled demo data).
+synthetic:
+  loans_per_vintage: 800
+  seed: 20181231
+  performance_cutoff: "2024-12"

@@ -1,0 +1,11 @@
+{
+  "cure": {
+    "n_defaults": 533,
+    "cure_rate": 0.539047619047619,
+    "p_liquidation": 0.460952380952381
+  },
+  "scorecard_n": 7755,
+  "hazard_rows": 2397374,
+  "hazard_events": 3635,
+  "lgd_n": 252
+}

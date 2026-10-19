@@ -1,0 +1,161 @@
+{
+  "synthetic": true,
+  "dates": {
+    "2018-12-31": {
+      "loans": 4919,
+      "gross_carrying_amount": 1114885751.19,
+      "ecl_weighted": 1536053.840287187,
+      "ecl_base": 1458599.0138919665,
+      "ecl_upside": 1399591.059217699,
+      "ecl_downside": 1904881.100542335,
+      "ecl_severe": 2890550.4560586265,
+      "coverage": {
+        "1": 0.00042033197234480116,
+        "2": 0.017875455056818004,
+        "3": 0.06057462274934787,
+        "Total": 0.001377767935994915
+      },
+      "share_of_book": {
+        "1": 0.9722125549842816,
+        "2": 0.016723934501897183,
+        "3": 0.011063510513821189,
+        "Total": 1.0
+      },
+      "loans_by_stage": {
+        "1": 4776,
+        "2": 97,
+        "3": 46,
+        "Total": 4919
+      },
+      "backtest": {
+        "loans": 4873,
+        "defaults": 38,
+        "observed": 0.007798071003488611,
+        "predicted": 0.007969327476982594,
+        "markov": 0.007806931883803932,
+        "traffic_light": "green",
+        "p_value": 1.0,
+        "auc": 0.7931693245523321,
+        "auc_markov": 0.7498993087683014,
+        "segments_green": 7,
+        "segments_total": 7
+      },
+      "scorecard": {
+        "in_sample": {
+          "auc": 0.7856427000333781,
+          "gini": 0.5712854000667562,
+          "loans": 7391
+        },
+        "out_of_time": {
+          "auc": 0.6123845637048929,
+          "gini": 0.22476912740978583,
+          "loans": 1276
+        }
+      },
+      "hazard_auc_in_sample": 0.8322390760299951,
+      "lgd": {
+        "n": 224,
+        "p_liq": 0.45490981963927857,
+        "mean_severity": 0.22965254205938027,
+        "downturn_severity": 0.2980382617119155
+      }
+    },
+    "2019-12-31": {
+      "loans": 5169,
+      "gross_carrying_amount": 1154578077.47,
+      "ecl_weighted": 1371477.7159884549,
+      "ecl_base": 1304317.602305639,
+      "ecl_upside": 1250043.9985913467,
+      "ecl_downside": 1694391.774434011,
+      "ecl_severe": 2559835.5864876267,
+      "coverage": {
+        "1": 0.0004151716606617076,
+        "2": 0.016055580220249697,
+        "3": 0.059942995117537354,
+        "Total": 0.001187860520436818
+      },
+      "share_of_book": {
+        "1": 0.9759491775204595,
+        "2": 0.01501579111738372,
+        "3": 0.009035031362156668,
+        "Total": 1.0
+      },
+      "loans_by_stage": {
+        "1": 5031,
+        "2": 94,
+        "3": 44,
+        "Total": 5169
+      },
+      "backtest": {
+        "loans": 5125,
+        "defaults": 218,
+        "observed": 0.04253658536585366,
+        "predicted": 0.008172073789544407,
+        "markov": 0.007988174815595326,
+        "traffic_light": "red",
+        "p_value": 3.1201552388003063e-83,
+        "auc": 0.5988552208696433,
+        "auc_markov": 0.5846866393824213,
+        "segments_green": 3,
+        "segments_total": 8
+      },
+      "scorecard": {
+        "in_sample": {
+          "auc": 0.7803712393836834,
+          "gini": 0.5607424787673667,
+          "loans": 7755
+        },
+        "out_of_time": {
+          "auc": 0.5721486643437863,
+          "gini": 0.1442973286875726,
+          "loans": 1335
+        }
+      },
+      "hazard_auc_in_sample": 0.8290860162696568,
+      "lgd": {
+        "n": 252,
+        "p_liq": 0.460952380952381,
+        "mean_severity": 0.22333509210849545,
+        "downturn_severity": 0.30163357859262624
+      }
+    }
+  },
+  "waterfall": [
+    {
+      "line": "Opening ECL 2018-12-31",
+      "amount": 1536053.840287187
+    },
+    {
+      "line": "New originations",
+      "amount": 136114.9385379096
+    },
+    {
+      "line": "Derecognitions (repaid, prepaid, sold)",
+      "amount": -89653.80576931316
+    },
+    {
+      "line": "Transfers to Stage 1",
+      "amount": -6035.778472759625
+    },
+    {
+      "line": "Transfers to Stage 2",
+      "amount": 13271.947155692802
+    },
+    {
+      "line": "Transfers to Stage 3",
+      "amount": 488367.59235812176
+    },
+    {
+      "line": "Remeasurement (PD, LGD, EAD, macro)",
+      "amount": -227442.35882933368
+    },
+    {
+      "line": "Write-offs",
+      "amount": -479198.6592790495
+    },
+    {
+      "line": "Closing ECL 2019-12-31",
+      "amount": 1371477.7159884549
+    }
+  ]
+}
